@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from .concurrency import RWLock
 from .analytics import GroupByResult, HashGroupBy, PrefixSumIndex
 from .columns import ColumnStore
 from .indexes import EqualityIndex
@@ -26,11 +27,121 @@ class LedgerDB:
         self._index_directory = root / "indexes"
         self._index_directory.mkdir(parents=True, exist_ok=True)
         self._indexes: dict[str, EqualityIndex] = {}
+        self._lock = RWLock()
         self._recover()
         self._reconcile_indexes()
 
     def insert(self, values: Mapping[str, Any]) -> None:
-        row = dict(values)
+        """Commit one row atomically with respect to all readers."""
+        with self._lock.write():
+            self._insert_unlocked(dict(values))
+
+    def bulk_insert(self, rows: list[Mapping[str, Any]], *, flush_indexes: bool = True) -> None:
+        """Durably append a batch as one writer-critical section."""
+        with self._lock.write():
+            normalized = [dict(row) for row in rows]
+            if not normalized:
+                return
+            if any(not row for row in normalized):
+                raise ValueError("rows cannot be empty")
+            records = [{"operation": "insert", "values": row} for row in normalized]
+            self._wal.append_many(records)
+            start = self._columns.row_count
+            self._columns.append_many(normalized)
+            for offset, row in enumerate(normalized):
+                self._append_to_indexes(row, start + offset)
+            if flush_indexes:
+                self._flush_indexes()
+
+    def rows(self) -> list[dict[str, Any]]:
+        with self._lock.read():
+            return self._columns.read_rows()
+
+    def filter_eq(self, column: str, value: Any, *, use_index: bool = True) -> list[dict[str, Any]]:
+        """Return rows satisfying ``column == value`` from one consistent state."""
+        with self._lock.read():
+            return self._filter_eq_unlocked(column, value, use_index=use_index)
+
+    def validate_filter_index(self, column: str, value: Any) -> bool:
+        """Validate index results against a scan while holding one read lock."""
+        with self._lock.read():
+            indexed = self._filter_eq_unlocked(column, value, use_index=True)
+            scanned = self._filter_eq_unlocked(column, value, use_index=False)
+            return indexed == scanned
+
+    def group_by(self, key_column: str, value_column: str) -> GroupByResult:
+        with self._lock.read():
+            rows = self._columns.read_rows()
+            try:
+                keys = np.asarray([row[key_column] for row in rows], dtype=np.int64)
+                values = np.asarray([row[value_column] for row in rows], dtype=np.float64)
+            except KeyError as error:
+                raise KeyError(f"unknown query column: {error.args[0]!r}") from error
+            return HashGroupBy.aggregate(keys, values)
+
+    def sort_merge_join(
+        self, other: "LedgerDB", left_column: str, right_column: str
+    ) -> list[dict[str, Any]]:
+        """Join two databases using a sort-merge join over a consistent read state.
+
+        Result keys are prefixed with ``left.`` and ``right.`` to avoid collisions.
+        Duplicate join keys produce all matching pairs. Locks are acquired in a
+        deterministic object order so two concurrent cross-database joins cannot
+        deadlock.
+        """
+        first, second = (self, other) if id(self) < id(other) else (other, self)
+        with first._lock.read():
+            with second._lock.read():
+                left_rows = self._columns.read_rows()
+                right_rows = other._columns.read_rows()
+                if left_column not in self._columns.columns:
+                    raise KeyError(f"unknown query column: {left_column!r}")
+                if right_column not in other._columns.columns:
+                    raise KeyError(f"unknown query column: {right_column!r}")
+                left_sorted = sorted(left_rows, key=lambda row: row[left_column])
+                right_sorted = sorted(right_rows, key=lambda row: row[right_column])
+                result: list[dict[str, Any]] = []
+                i = j = 0
+                while i < len(left_sorted) and j < len(right_sorted):
+                    left_key = left_sorted[i][left_column]
+                    right_key = right_sorted[j][right_column]
+                    if left_key < right_key:
+                        i += 1
+                    elif left_key > right_key:
+                        j += 1
+                    else:
+                        i_end = i
+                        while i_end < len(left_sorted) and left_sorted[i_end][left_column] == left_key:
+                            i_end += 1
+                        j_end = j
+                        while j_end < len(right_sorted) and right_sorted[j_end][right_column] == right_key:
+                            j_end += 1
+                        for left_row in left_sorted[i:i_end]:
+                            for right_row in right_sorted[j:j_end]:
+                                merged = {f"left.{key}": value for key, value in left_row.items()}
+                                merged.update({f"right.{key}": value for key, value in right_row.items()})
+                                result.append(merged)
+                        i, j = i_end, j_end
+                return result
+
+    def prefix_sum(self, column: str) -> PrefixSumIndex:
+        with self._lock.read():
+            try:
+                values = np.asarray([row[column] for row in self._columns.read_rows()], dtype=np.float64)
+            except KeyError as error:
+                raise KeyError(f"unknown query column: {error.args[0]!r}") from error
+            return PrefixSumIndex(values)
+
+    @property
+    def row_count(self) -> int:
+        with self._lock.read():
+            return self._columns.row_count
+
+    def close(self) -> None:
+        with self._lock.write():
+            self._flush_indexes()
+
+    def _insert_unlocked(self, row: dict[str, Any]) -> None:
         if not row:
             raise ValueError("rows cannot be empty")
         record = {"operation": "insert", "values": row}
@@ -42,57 +153,13 @@ class LedgerDB:
         self._append_to_indexes(row, row_id)
         self._flush_indexes()
 
-    def bulk_insert(self, rows: list[Mapping[str, Any]], *, flush_indexes: bool = True) -> None:
-        """Durably append a batch; index flushing can be deferred for bulk setup."""
-        normalized = [dict(row) for row in rows]
-        if not normalized:
-            return
-        if any(not row for row in normalized):
-            raise ValueError("rows cannot be empty")
-        records = [{"operation": "insert", "values": row} for row in normalized]
-        self._wal.append_many(records)
-        start = self._columns.row_count
-        self._columns.append_many(normalized)
-        for offset, row in enumerate(normalized):
-            self._append_to_indexes(row, start + offset)
-        if flush_indexes:
-            self._flush_indexes()
-
-    def rows(self) -> list[dict[str, Any]]:
-        return self._columns.read_rows()
-
-    def filter_eq(self, column: str, value: Any, *, use_index: bool = True) -> list[dict[str, Any]]:
-        """Return rows satisfying ``column == value`` using an optional index."""
+    def _filter_eq_unlocked(self, column: str, value: Any, *, use_index: bool) -> list[dict[str, Any]]:
         if column not in self._columns.columns:
             raise KeyError(f"unknown query column: {column!r}")
         if use_index:
-            index = self._get_index(column)
-            row_ids = index.lookup(value)
+            row_ids = self._get_index(column).lookup(value)
             return self._columns.read_rows_by_ids(row_ids)
-        return [row for row in self.rows() if row[column] == value]
-
-    def group_by(self, key_column: str, value_column: str) -> GroupByResult:
-        rows = self.rows()
-        try:
-            keys = np.asarray([row[key_column] for row in rows], dtype=np.int64)
-            values = np.asarray([row[value_column] for row in rows], dtype=np.float64)
-        except KeyError as error:
-            raise KeyError(f"unknown query column: {error.args[0]!r}") from error
-        return HashGroupBy.aggregate(keys, values)
-
-    def prefix_sum(self, column: str) -> PrefixSumIndex:
-        try:
-            values = np.asarray([row[column] for row in self.rows()], dtype=np.float64)
-        except KeyError as error:
-            raise KeyError(f"unknown query column: {error.args[0]!r}") from error
-        return PrefixSumIndex(values)
-
-    @property
-    def row_count(self) -> int:
-        return self._columns.row_count
-
-    def close(self) -> None:
-        self._flush_indexes()
+        return [row for row in self._columns.read_rows() if row[column] == value]
 
     def _get_index(self, column: str) -> EqualityIndex:
         index = self._indexes.get(column)
