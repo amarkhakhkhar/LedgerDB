@@ -1,0 +1,5 @@
+location            = "East US"
+resource_group_name = "ledgerdb-raft-rg"
+admin_username      = "ledgerdb"
+ssh_public_key      = "ssh-ed25519 AAAA...replace-with-your-key"
+vm_size             = "Standard_B1s"

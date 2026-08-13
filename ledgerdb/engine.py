@@ -13,6 +13,7 @@ from .concurrency import RWLock
 from .analytics import GroupByResult, HashGroupBy, PrefixSumIndex
 from .columns import ColumnStore
 from .indexes import EqualityIndex
+from .transactions import LedgerTransactionStore, suspicious_key_combinations
 from .wal import WriteAheadLog
 
 
@@ -28,8 +29,10 @@ class LedgerDB:
         self._index_directory.mkdir(parents=True, exist_ok=True)
         self._indexes: dict[str, EqualityIndex] = {}
         self._lock = RWLock()
+        self._transactions = LedgerTransactionStore(root / "ledger")
         self._recover()
         self._reconcile_indexes()
+        self._transactions.recover()
 
     def insert(self, values: Mapping[str, Any]) -> None:
         """Commit one row atomically with respect to all readers."""
@@ -52,6 +55,47 @@ class LedgerDB:
                 self._append_to_indexes(row, start + offset)
             if flush_indexes:
                 self._flush_indexes()
+
+    def post_transaction(
+        self,
+        idempotency_key: str,
+        debit_account: str,
+        credit_account: str,
+        amount: int,
+        *,
+        transaction_key: int = 0,
+    ) -> str:
+        """Atomically post a balanced debit/credit pair.
+
+        Retries with the same idempotency key are no-ops and return the
+        original transaction id. The transaction WAL is the durability source
+        of truth; recovery materializes any missing ledger side.
+        """
+        with self._lock.write():
+            existing = self._transactions.transaction_for_key(idempotency_key)
+            if existing is not None:
+                return existing
+            transaction_id = f"tx-{idempotency_key}"
+            self._transactions.apply_transaction(
+                transaction_id,
+                idempotency_key,
+                {"account": debit_account, "amount": amount, "transaction_key": transaction_key},
+                {"account": credit_account, "amount": amount, "transaction_key": transaction_key},
+            )
+            return transaction_id
+
+    def ledger_entries(self) -> list[dict[str, Any]]:
+        with self._lock.read():
+            return self._transactions.entries
+
+    def ledger_balance(self) -> tuple[int, int]:
+        with self._lock.read():
+            return self._transactions.balance()
+
+    def validate_suspicious_transactions(self, target: int, *, arity: int = 3) -> list[tuple[int, ...]]:
+        with self._lock.read():
+            keys = [entry["transaction_key"] for entry in self._transactions.entries]
+            return suspicious_key_combinations(keys, target, arity)
 
     def rows(self) -> list[dict[str, Any]]:
         with self._lock.read():

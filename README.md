@@ -78,3 +78,38 @@ push / pull request
         -> Docker build
         -> GHCR push: sha-<commit> and latest
 ```
+
+## Day 5: double-entry ledger and crash-safe transactions
+
+`post_transaction()` writes a balanced debit/credit pair as one transaction. The
+transaction WAL stores the complete pair before either ledger entry is
+materialized. Recovery replays any WAL transaction that is not already fully
+materialized, so a process killed after the first ledger entry still recovers a
+complete balanced pair.
+
+Idempotency keys are persisted with each ledger entry. Repeating a transaction
+with the same key returns the original transaction ID and does not append a
+second pair.
+
+The crash proof is executable with:
+
+```powershell
+python tests/test_day5_crash.py
+```
+
+It kills a subprocess after the first side of a transaction has been persisted,
+reopens the database, and asserts `total_debits == total_credits` and exactly one
+transaction pair. The full test suite also covers retries and restart recovery.
+
+The simplified suspicious-key validator uses a 3Sum/4Sum-style complement
+search. It flags unique combinations of persisted transaction keys that reach a
+configured target; it is an algorithmic demonstration, not a production fraud
+model.
+
+## Day 5: Terraform for the Day 6 Raft cluster
+
+`terraform/` provisions exactly three Azure Linux VMs plus a shared virtual
+network, subnet, NICs, and SSH access controls. No cloud resources are created
+by CI. From a clean checkout, use `terraform init`, `terraform fmt -check`,
+`terraform validate`, `terraform plan`, `terraform apply`, and finally
+`terraform destroy` as documented in `terraform/README.md`.
