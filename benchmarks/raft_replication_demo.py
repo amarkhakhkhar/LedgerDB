@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -28,9 +29,21 @@ def post(port: int, path: str, payload: dict) -> dict:
         return json.loads(response.read())
 
 
+def available_ports(count: int) -> list[int]:
+    """Allocate distinct ephemeral loopback ports for this isolated demo."""
+    sockets = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(count)]
+    try:
+        for listener in sockets:
+            listener.bind(("127.0.0.1", 0))
+        return [listener.getsockname()[1] for listener in sockets]
+    finally:
+        for listener in sockets:
+            listener.close()
+
+
 def main() -> None:
     root = tempfile.mkdtemp(prefix="ledgerdb-raft-replication-")
-    ports = [19201, 19202, 19203]
+    ports = available_ports(3)
     peers = ",".join(f"node-{i}=127.0.0.1:{port}" for i, port in enumerate(ports))
     procs: dict[int, subprocess.Popen] = {}
     try:

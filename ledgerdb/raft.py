@@ -69,6 +69,11 @@ class RaftNode:
         self._match_index: dict[str, int] = {}
         self._lag_windows: dict[str, deque[int]] = {}
         self._replication_locks: dict[str, threading.Lock] = {}
+        # Each node receives independent jitter inside a stable slice of the
+        # configured timeout window. Purely random timeouts can still collide
+        # under synchronized process startup, repeatedly splitting a 3-node
+        # vote. Slices retain jitter but guarantee a deterministic tie-break.
+        self._election_rng = random.Random()
         self._db = LedgerDB(str(self.state_dir / "database"))
         self.peers = self._resolve_peers(peers, peer_service, replica_count)
         self._load_state()
@@ -427,7 +432,16 @@ class RaftNode:
         return hashlib.sha256(payload).hexdigest()
 
     def _reset_election_deadline(self) -> None:
-        self._election_deadline = time.monotonic() + random.uniform(*self.election_timeout)
+        minimum, maximum = self.election_timeout
+        node_order = sorted(self.peers)
+        try:
+            rank = node_order.index(self.node_id)
+        except ValueError:
+            rank = 0
+        width = (maximum - minimum) / max(1, len(node_order))
+        lower = minimum + (rank * width)
+        upper = lower + width
+        self._election_deadline = time.monotonic() + self._election_rng.uniform(lower, upper)
 
     @staticmethod
     def _post(address: str, path: str, payload: dict[str, Any], timeout: float) -> dict[str, Any] | None:
@@ -449,8 +463,18 @@ class RaftNode:
 
     def _persist_state(self) -> None:
         temporary = self._state_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"current_term": self._state.current_term, "voted_for": self._state.voted_for, "applied_log_index": self._applied_log_index}))
-        with temporary.open("rb") as file:
+        payload = json.dumps({
+            "current_term": self._state.current_term,
+            "voted_for": self._state.voted_for,
+            "applied_log_index": self._applied_log_index,
+        }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        # Flush and fsync while the temporary file is writable. The former
+        # implementation reopened it as ``rb`` and then called ``flush()``,
+        # raising UnsupportedOperation inside the election ticker after nodes
+        # voted for themselves. Atomic replacement preserves durable Raft term
+        # state without killing the election loop.
+        with temporary.open("wb") as file:
+            file.write(payload)
             file.flush()
             os.fsync(file.fileno())
         os.replace(temporary, self._state_path)
