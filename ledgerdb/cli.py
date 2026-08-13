@@ -28,6 +28,8 @@ def main() -> None:
     raft = commands.add_parser("raft-server")
     raft.add_argument("--node-id", default=os.environ.get("RAFT_NODE_ID", os.environ.get("HOSTNAME", "node-0")))
     raft.add_argument("--peers", default=os.environ.get("RAFT_PEERS", ""))
+    raft.add_argument("--peer-service", default=os.environ.get("RAFT_PEER_SERVICE", ""))
+    raft.add_argument("--replicas", type=int, default=int(os.environ.get("RAFT_REPLICAS", "3")))
     raft.add_argument("--port", type=int, default=int(os.environ.get("RAFT_PORT", "8000")))
     raft.add_argument("--host", default=os.environ.get("RAFT_HOST", "0.0.0.0"))
     raft.add_argument("--heartbeat-ms", type=int, default=int(os.environ.get("RAFT_HEARTBEAT_MS", "150")))
@@ -35,11 +37,13 @@ def main() -> None:
     raft.add_argument("--election-max-ms", type=int, default=int(os.environ.get("RAFT_ELECTION_MAX_MS", "1000")))
     arguments = parser.parse_args()
     if arguments.command == "raft-server":
-        peers = parse_peers(arguments.peers)
+        peers = parse_peers(arguments.peers) if arguments.peers else None
         node = RaftNode(
             arguments.node_id, peers, os.path.join(arguments.data_dir, "raft"),
             host=arguments.host, port=arguments.port,
             heartbeat_interval=arguments.heartbeat_ms / 1000.0,
+            peer_service=arguments.peer_service or None,
+            replica_count=arguments.replicas,
             election_timeout=(arguments.election_min_ms / 1000.0, arguments.election_max_ms / 1000.0),
         )
         node.start()

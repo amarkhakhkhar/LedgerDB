@@ -1,49 +1,30 @@
-# LedgerDB 3-node Raft cluster on Kubernetes
+# LedgerDB Day 7 Kubernetes bootstrap
 
-The StatefulSet provides stable identities and DNS names required by Raft:
+The headless `ledgerdb` Service provides stable StatefulSet DNS identities. A
+fresh cluster needs no manually generated peer list: each node derives
+`node-0`, `node-1`, and `node-2` from `RAFT_PEER_SERVICE` and `RAFT_REPLICAS`.
 
-- `ledgerdb-0.ledgerdb:8000`
-- `ledgerdb-1.ledgerdb:8000`
-- `ledgerdb-2.ledgerdb:8000`
+Set the image before applying:
 
-Replace `REPLACE_OWNER` in `ledgerdb.yaml` with the GitHub Container Registry owner that contains the Day 6 image.
-
-## Deploy
-
-```bash
-kubectl apply -f k8s/ledgerdb.yaml
-kubectl rollout status statefulset/ledgerdb
-kubectl get pods -l app=ledgerdb -o wide
+```powershell
+(Get-Content k8s/ledgerdb.yaml) -replace 'ghcr.io/REPLACE_OWNER/ledgerdb:latest','ghcr.io/YOUR_GITHUB_OWNER/ledgerdb:latest' | Set-Content k8s/ledgerdb.local.yaml
+kubectl apply -f k8s/ledgerdb.local.yaml
 ```
 
-## Inspect leader election
+Or use the bootstrap scripts after replacing the image once in the manifest:
 
 ```bash
-kubectl exec ledgerdb-0 -- python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/status').read().decode())"
+./scripts/recreate-cluster.sh
+./scripts/teardown-cluster.sh
 ```
 
-Repeat for `ledgerdb-1` and `ledgerdb-2`. Exactly one should report `"role": "leader"` after election converges.
+PowerShell:
 
-To kill the leader, find its pod from `/status` and run:
-
-```bash
-kubectl delete pod ledgerdb-<leader>
+```powershell
+.\scripts\recreate-cluster.ps1
+.\scripts\teardown-cluster.ps1
 ```
 
-The StatefulSet recreates the same ordinal identity. The surviving two nodes must elect a leader within the configured election timeout bound.
-
-## Cleanup
-
-```bash
-kubectl delete -f k8s/ledgerdb.yaml
-```
-
-## Recorded Kubernetes leader-failure proof
-
-After the StatefulSet is running, run from the repository root:
-
-```bash
-python benchmarks/raft_k8s_demo.py --bound-seconds 5
-```
-
-The script queries all three stable pods, records the current leader, deletes that leader pod, waits for the StatefulSet to recreate it while the surviving quorum elects a replacement, and records the new leader and elapsed election time. A successful run prints `k8s_leader_re_election=PASS`.
+The bootstrap waits for all three stable pods and then runs the leader-election
+proof. The script does not claim a live Kubernetes proof unless `kubectl` is
+connected to a real cluster.
