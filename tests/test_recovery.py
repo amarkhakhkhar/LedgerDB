@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from ledgerdb import LedgerDB
 
 
@@ -50,3 +52,22 @@ class CrashRecoveryTests(unittest.TestCase):
             database.insert({"account": "a", "amount": 1})
             with self.assertRaises(ValueError):
                 database.insert({"account": "a", "currency": "USD"})
+
+    def test_query_results_include_wal_recovered_row_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = LedgerDB(temporary)
+            database.insert({"group": 1, "amount": 10})
+            database.insert({"group": 2, "amount": 5})
+            database.insert({"group": 1, "amount": 20})
+            environment = os.environ | {"LEDGERDB_CRASH_AFTER_WAL": "1"}
+            result = subprocess.run(
+                [sys.executable, "-m", "ledgerdb.cli", "--data-dir", temporary, "insert", '{"group":2,"amount":7}'],
+                check=False, env=environment,
+            )
+            self.assertEqual(result.returncode, 137)
+            recovered = LedgerDB(temporary)
+            after = recovered.group_by("group", "amount")
+            np.testing.assert_array_equal(after.keys, [1, 2])
+            np.testing.assert_allclose(after.sums, [30, 12])
+            np.testing.assert_array_equal(after.counts, [2, 2])
+            self.assertEqual(recovered.prefix_sum("amount").range_avg(0, 4), 10.5)

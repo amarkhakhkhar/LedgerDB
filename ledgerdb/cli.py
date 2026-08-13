@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 
 from .engine import LedgerDB
 
@@ -20,7 +21,8 @@ def main() -> None:
     arguments = parser.parse_args()
     database = LedgerDB(arguments.data_dir)
     if arguments.command == "insert":
-        row = json.loads(arguments.row)
+        row = json.loads(os.environ["LEDGERDB_ROW"])
+        print("ROW:", repr(row))
         if not isinstance(row, dict):
             raise SystemExit("row must be a JSON object")
         database.insert(row)

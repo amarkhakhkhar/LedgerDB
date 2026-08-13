@@ -7,7 +7,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .columns import ColumnStore
+from .analytics import HashGroupBy, GroupByResult, PrefixSumIndex
 from .wal import WriteAheadLog
 
 
@@ -43,6 +46,24 @@ class LedgerDB:
     def rows(self) -> list[dict[str, Any]]:
         """Return all durable, recovered rows in insertion order."""
         return self._columns.read_rows()
+
+    def group_by(self, key_column: str, value_column: str) -> GroupByResult:
+        """Aggregate a recovered snapshot by signed integer key."""
+        rows = self.rows()
+        try:
+            keys = np.asarray([row[key_column] for row in rows], dtype=np.int64)
+            values = np.asarray([row[value_column] for row in rows], dtype=np.float64)
+        except KeyError as error:
+            raise KeyError(f"unknown query column: {error.args[0]!r}") from error
+        return HashGroupBy.aggregate(keys, values)
+
+    def prefix_sum(self, column: str) -> PrefixSumIndex:
+        """Build a range-query index from a recovered numeric column snapshot."""
+        try:
+            values = np.asarray([row[column] for row in self.rows()], dtype=np.float64)
+        except KeyError as error:
+            raise KeyError(f"unknown query column: {error.args[0]!r}") from error
+        return PrefixSumIndex(values)
 
     @property
     def row_count(self) -> int:

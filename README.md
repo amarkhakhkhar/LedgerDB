@@ -5,6 +5,33 @@ Day 1 establishes recovery, rather than merely persistence: every row is first
 committed to a fsynced write-ahead log (WAL), then applied to append-only,
 disk-backed column files.
 
+## Day 2: recovered analytics
+
+`group_by()` builds an open-addressed hash aggregate (`SUM`, `COUNT`, `AVG`) on
+the recovered data snapshot. `prefix_sum()` builds one O(n) index, then returns
+range `SUM` and `AVG` in O(1), independent of range size. The test suite proves
+a WAL-only row is returned exactly once in a post-crash query result.
+
+```powershell
+python -m unittest discover -s tests -v
+python benchmarks/query_benchmark.py --rows 1000000 --groups 10000 --seed 42
+```
+
+## Compose persistence proof
+
+`docker-compose.yml` retains the data/WAL directory in named volume
+`ledgerdb-day-02-data`; `down` removes containers but not the named volume.
+
+```powershell
+docker compose run --rm ledgerdb insert '{"account":"cash","amount":100}'
+docker compose down
+docker compose up --build
+docker compose run --rm ledgerdb rows
+```
+
+The final command must print the earlier row. Do not pass `--volumes` to
+`docker compose down`, as that deliberately removes the durable data volume.
+
 ## Storage contract
 
 ```text
