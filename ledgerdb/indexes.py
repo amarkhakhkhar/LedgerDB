@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from bisect import bisect_left, bisect_right, insort_right
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -104,3 +105,29 @@ class EqualityIndex:
                     self._row_count += 1
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             self.clear()
+
+
+class RangeIndex:
+    """In-memory sorted ``(value, row_id)`` index for comparable values.
+
+    ``lookup_between`` deliberately uses :mod:`bisect` rather than scanning the
+    column.  The index is derived data, just like ``EqualityIndex``; LedgerDB
+    rebuilds it from the durable columns when it is first needed.
+    """
+
+    def __init__(self, values: Iterable[Any] = ()) -> None:
+        self._entries: list[tuple[Any, int]] = []
+        self.rebuild(values)
+
+    def rebuild(self, values: Iterable[Any]) -> None:
+        self._entries = sorted((value, row_id) for row_id, value in enumerate(values))
+
+    def append(self, value: Any, row_id: int) -> None:
+        insort_right(self._entries, (value, row_id))
+
+    def lookup_between(self, lower: Any, upper: Any) -> list[int]:
+        if lower > upper:
+            raise ValueError("BETWEEN lower bound must not exceed upper bound")
+        start = bisect_left(self._entries, (lower, -1))
+        stop = bisect_right(self._entries, (upper, float("inf")))
+        return [row_id for _, row_id in self._entries[start:stop]]

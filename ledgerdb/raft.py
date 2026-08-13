@@ -16,6 +16,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .engine import LedgerDB
+from .sql import QueryPlanner
 
 
 @dataclass
@@ -65,6 +66,8 @@ class RaftNode:
         self._election_deadline = 0.0
         self._log: list[dict[str, Any]] = []
         self._applied_log_index = 0
+        self._leader_log_index = 0
+        self._last_leader_contact = 0.0
         self._next_index: dict[str, int] = {}
         self._match_index: dict[str, int] = {}
         self._lag_windows: dict[str, deque[int]] = {}
@@ -133,6 +136,7 @@ class RaftNode:
                     "max_lag": max(samples) if samples else 0,
                     "samples": len(samples),
                 }
+            ready = self._ready_unlocked()
             return {
                 "node_id": self.node_id,
                 "term": self._state.current_term,
@@ -143,9 +147,24 @@ class RaftNode:
                 "heartbeat_interval": self.heartbeat_interval,
                 "election_timeout": list(self.election_timeout),
                 "log_length": last,
+                "leader_log_index": self._leader_log_index,
+                "caught_up": last >= self._leader_log_index,
+                "ready": ready,
                 "log_digest": self._log_digest_unlocked(),
                 "replication": replication,
             }
+
+    def _ready_unlocked(self) -> bool:
+        """A node is query-ready only when it has a fresh, caught-up leader view."""
+        if self._state.role == "leader":
+            return True
+        max_contact_age = max(self.election_timeout) + self.heartbeat_interval
+        return (
+            self._state.role == "follower"
+            and self._state.leader_id is not None
+            and len(self._log) >= self._leader_log_index
+            and time.monotonic() - self._last_leader_contact <= max_contact_age
+        )
 
     def state_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -178,6 +197,11 @@ class RaftNode:
             def do_GET(self) -> None:  # noqa: N802
                 if self.path == "/status":
                     self._json(200, node.status())
+                elif self.path == "/livez":
+                    self._json(200, {"live": True, "node_id": node.node_id})
+                elif self.path == "/readyz":
+                    payload = node.status()
+                    self._json(200 if payload["ready"] else 503, payload)
                 elif self.path == "/state":
                     self._json(200, node.state_snapshot())
                 else:
@@ -192,6 +216,8 @@ class RaftNode:
                         self._json(200, node._append_entries(payload))
                     elif self.path == "/client-write":
                         self._json(200, node._client_write(payload))
+                    elif self.path == "/query":
+                        self._json(200, node._query(payload))
                     else:
                         self._json(404, {"error": "not found"})
                 except Exception as error:
@@ -229,6 +255,8 @@ class RaftNode:
                 self._state.role = "follower"
                 self._state.leader_id = leader
                 self._reset_election_deadline()
+            self._leader_log_index = int(request.get("leader_log_index", prev_index + len(entries)))
+            self._last_leader_contact = time.monotonic()
             if prev_index > len(self._log):
                 return {"term": self._state.current_term, "success": False, "match_index": len(self._log)}
             for entry in entries:
@@ -241,6 +269,11 @@ class RaftNode:
                     return {"term": self._state.current_term, "success": False, "match_index": len(self._log)}
                 self._append_log_entry(entry)
                 self._apply_command(entry["command"])
+                # A test-only knob makes a catch-up window observable to a
+                # Kubernetes readiness probe; production defaults to zero.
+                delay_ms = int(os.environ.get("RAFT_CATCHUP_APPLY_DELAY_MS", "0"))
+                if delay_ms:
+                    time.sleep(delay_ms / 1000.0)
                 self._applied_log_index = index
                 self._persist_state()
             return {"term": self._state.current_term, "success": True, "match_index": len(self._log)}
@@ -262,6 +295,19 @@ class RaftNode:
         with self._lock:
             acknowledged = sum(1 for peer in self.peers if peer != self.node_id and self._match_index.get(peer, 0) >= index) + 1
             return {"success": acknowledged >= self.majority, "index": index, "acknowledgements": acknowledged, "leader_id": self.node_id}
+
+    def _query(self, request: dict[str, Any]) -> dict[str, Any]:
+        sql = request.get("sql")
+        if not isinstance(sql, str):
+            return {"success": False, "error": "sql must be a string"}
+        with self._lock:
+            if not self._ready_unlocked():
+                return {"success": False, "error": "node is not query-ready", "leader_id": self._state.leader_id}
+        planner = QueryPlanner(self._db)
+        try:
+            return {"success": True, "plan": planner.explain(sql), "rows": planner.execute(sql)}
+        except (KeyError, ValueError) as error:
+            return {"success": False, "error": str(error)}
 
     def append_client_command(self, command: dict[str, Any], timeout: float = 3.0) -> dict[str, Any]:
         return self._client_write({"command": command, "timeout": timeout})
@@ -356,7 +402,7 @@ class RaftNode:
                 prev = next_index - 1
                 entries = self._log[prev:]
                 term = self._state.current_term
-                payload = {"term": term, "leader_id": self.node_id, "prev_log_index": prev, "entries": entries}
+                payload = {"term": term, "leader_id": self.node_id, "prev_log_index": prev, "leader_log_index": len(self._log), "entries": entries}
                 lag = len(self._log) - self._match_index.get(peer_id, 0)
                 self._lag_windows.setdefault(peer_id, deque(maxlen=60)).append(max(0, lag))
             response = self._post(address, "/append-entries", payload, timeout=0.35)

@@ -12,7 +12,7 @@ import numpy as np
 from .concurrency import RWLock
 from .analytics import GroupByResult, HashGroupBy, PrefixSumIndex
 from .columns import ColumnStore
-from .indexes import EqualityIndex
+from .indexes import EqualityIndex, RangeIndex
 from .transactions import LedgerTransactionStore, suspicious_key_combinations
 from .wal import WriteAheadLog
 
@@ -28,6 +28,7 @@ class LedgerDB:
         self._index_directory = root / "indexes"
         self._index_directory.mkdir(parents=True, exist_ok=True)
         self._indexes: dict[str, EqualityIndex] = {}
+        self._range_indexes: dict[str, RangeIndex] = {}
         self._lock = RWLock()
         self._transactions = LedgerTransactionStore(root / "ledger")
         self._recover()
@@ -105,6 +106,15 @@ class LedgerDB:
         """Return rows satisfying ``column == value`` from one consistent state."""
         with self._lock.read():
             return self._filter_eq_unlocked(column, value, use_index=use_index)
+
+    def filter_between(self, column: str, lower: Any, upper: Any) -> list[dict[str, Any]]:
+        """Return an inclusive range using a sorted index and binary search."""
+        with self._lock.read():
+            if column not in self._columns.columns:
+                raise KeyError(f"unknown query column: {column!r}")
+            row_ids = self._get_range_index(column).lookup_between(lower, upper)
+            # Index order is value order; SQL without ORDER BY retains durable row order.
+            return self._columns.read_rows_by_ids(sorted(row_ids))
 
     def validate_filter_index(self, column: str, value: Any) -> bool:
         """Validate index results against a scan while holding one read lock."""
@@ -212,9 +222,18 @@ class LedgerDB:
             self._indexes[column] = index
         return index
 
+    def _get_range_index(self, column: str) -> RangeIndex:
+        index = self._range_indexes.get(column)
+        if index is None:
+            index = RangeIndex(self._columns.read_column(column))
+            self._range_indexes[column] = index
+        return index
+
     def _append_to_indexes(self, row: dict[str, Any], row_id: int) -> None:
         for column, value in row.items():
             self._get_index(column).append(value, row_id)
+            if column in self._range_indexes:
+                self._range_indexes[column].append(value, row_id)
 
     def _flush_indexes(self) -> None:
         for index in self._indexes.values():
