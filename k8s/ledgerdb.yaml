@@ -37,15 +37,21 @@ spec:
             - "--data-dir"
             - "/var/lib/ledgerdb"
             - "raft-server"
-            - "--peers"
-            - "ledgerdb-0=ledgerdb-0.ledgerdb:8000,ledgerdb-1=ledgerdb-1.ledgerdb:8000,ledgerdb-2=ledgerdb-2.ledgerdb:8000"
+            - "--peer-service"
+            - "ledgerdb"
+            - "--replicas"
+            - "3"
             - "--port"
             - "8000"
           env:
-            - name: HOSTNAME
+            - name: RAFT_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: RAFT_PEER_SERVICE
+              value: "ledgerdb"
+            - name: RAFT_REPLICAS
+              value: "3"
           ports:
             - name: raft
               containerPort: 8000

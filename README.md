@@ -130,3 +130,29 @@ The demo records the initial leader, kills it, and records the replacement leade
 ### Kubernetes
 
 `k8s/ledgerdb.yaml` deploys three LedgerDB nodes as a StatefulSet behind a headless Service. StatefulSet ordinals provide stable identities and DNS names required by Raft. See `k8s/README.md` for deployment and cleanup commands. Replace the GHCR owner placeholder with the repository owner containing the Day 6 image.
+
+## Day 7: Raft log replication and automatic peer discovery
+
+The leader now persists application commands in `raft-log.jsonl` and replicates
+those entries with `AppendEntries`. Each follower persists an entry before
+acknowledging it and applies the command to its local LedgerDB. The leader
+tracks `next_index` and `match_index` per follower and retries from the missing
+prefix after a reconnect. `/status` exposes current, average, and maximum
+replication lag over a rolling 60-sample window; `/state` exposes a deterministic
+log digest for convergence proofs.
+
+Run the real local follower-failure proof:
+
+```powershell
+python benchmarks/raft_replication_demo.py
+```
+
+The proof starts three processes, elects a leader, writes five entries, kills a
+follower, writes twenty more entries, restarts the follower, and asserts that its
+Raft log digest and materialized LedgerDB rows exactly equal the leader.
+
+Kubernetes uses the headless `ledgerdb` Service and StatefulSet DNS identities.
+The node derives peers from `RAFT_PEER_SERVICE` and `RAFT_REPLICAS`, so no
+manual peer list is required. Use `scripts/bootstrap-cluster.sh` (or the
+PowerShell equivalent) to recreate the cluster and verify automatic election;
+use the teardown script to remove it.

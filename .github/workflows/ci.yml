@@ -24,6 +24,8 @@ jobs:
         run: python tests/test_day5_crash.py
       - name: Day 6 Raft election proof
         run: python benchmarks/raft_election_demo.py --bound-seconds 3
+      - name: Day 7 Raft replication proof
+        run: python benchmarks/raft_replication_demo.py
       - name: Terraform fmt
         uses: hashicorp/setup-terraform@v3
         with:

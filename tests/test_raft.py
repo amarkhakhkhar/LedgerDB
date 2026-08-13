@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,11 @@ class RaftElectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="ledgerdb-raft-")
         self.procs: list[subprocess.Popen[str]] = []
-        self.ports = [19101, 19102, 19103]
+        # unittest does not invoke tearDown when setUp raises. Register cleanup
+        # first so a failed election setup cannot leak port-bound Raft children
+        # into the next test run.
+        self.addCleanup(self._cleanup)
+        self.ports = self._available_ports(3)
         self.peers = ",".join(f"node-{i}=127.0.0.1:{port}" for i, port in enumerate(self.ports))
         package_root = os.path.dirname(os.path.dirname(__file__))
         for i, port in enumerate(self.ports):
@@ -24,12 +29,15 @@ class RaftElectionTests(unittest.TestCase):
                 sys.executable, "-m", "ledgerdb.cli", "--data-dir", data,
                 "raft-server", "--node-id", f"node-{i}", "--peers", self.peers,
                 "--port", str(port), "--heartbeat-ms", "100",
-                "--election-min-ms", "400", "--election-max-ms", "650",
+                # Windows subprocess startup and fsync can exceed the narrow
+                # Day 6 window. This remains well inside the 2.5s re-election
+                # bound while allowing a RequestVote round to finish.
+                "--election-min-ms", "700", "--election-max-ms", "1100",
             ]
             self.procs.append(subprocess.Popen(command, cwd=package_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         self._wait_for_leader(5.0)
 
-    def tearDown(self) -> None:
+    def _cleanup(self) -> None:
         for proc in self.procs:
             if proc.poll() is None:
                 proc.kill()
@@ -39,6 +47,18 @@ class RaftElectionTests(unittest.TestCase):
     def _status(self, port: int) -> dict:
         with urlopen(f"http://127.0.0.1:{port}/status", timeout=0.3) as response:
             return json.loads(response.read())
+
+    @staticmethod
+    def _available_ports(count: int) -> list[int]:
+        """Reserve distinct ephemeral loopback ports for this test cluster."""
+        sockets = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(count)]
+        try:
+            for listener in sockets:
+                listener.bind(("127.0.0.1", 0))
+            return [listener.getsockname()[1] for listener in sockets]
+        finally:
+            for listener in sockets:
+                listener.close()
 
     def _statuses(self) -> list[dict]:
         result = []
