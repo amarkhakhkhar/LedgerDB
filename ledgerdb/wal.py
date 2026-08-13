@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,19 @@ class WriteAheadLog:
         dies before the matching columnar-file update.
         """
         payload = json.dumps(record, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+        with self._path.open("ab", buffering=0) as file:
+            file.write(payload)
+            file.flush()
+            os.fsync(file.fileno())
+
+    def append_many(self, records: Iterable[dict[str, Any]]) -> None:
+        """Append a batch and fsync once; used by benchmark/setup paths."""
+        payload = b"".join(
+            json.dumps(record, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+            for record in records
+        )
+        if not payload:
+            return
         with self._path.open("ab", buffering=0) as file:
             file.write(payload)
             file.flush()
