@@ -53,6 +53,42 @@ class CrashRecoveryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 database.insert({"account": "a", "currency": "USD"})
 
+    def test_equality_index_matches_scan_and_survives_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = LedgerDB(temporary)
+            database.bulk_insert([
+                {"account": "cash", "amount": 100},
+                {"account": "bank", "amount": 200},
+                {"account": "cash", "amount": 300},
+            ])
+            expected = database.filter_eq("account", "cash", use_index=False)
+            self.assertEqual(database.filter_eq("account", "cash"), expected)
+            self.assertTrue((Path(temporary) / "indexes" / "account.eqindex.jsonl").exists())
+
+            recovered = LedgerDB(temporary)
+            self.assertEqual(recovered.filter_eq("account", "cash"), expected)
+
+    def test_equality_index_is_rebuilt_after_crash_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = LedgerDB(temporary)
+            database.insert({"account": "opening", "amount": 100})
+            environment = os.environ | {"LEDGERDB_CRASH_AFTER_WAL": "1"}
+            result = subprocess.run(
+                [sys.executable, "-m", "ledgerdb.cli", "--data-dir", temporary, "insert",
+                 '{"account":"crash-committed","amount":25}'],
+                check=False, env=environment,
+            )
+            self.assertEqual(result.returncode, 137)
+
+            recovered = LedgerDB(temporary)
+            expected = recovered.filter_eq("account", "crash-committed", use_index=False)
+            self.assertEqual(expected, [{"account": "crash-committed", "amount": 25}])
+            self.assertEqual(recovered.filter_eq("account", "crash-committed"), expected)
+
+            # The index must also remain correct across another restart.
+            restarted = LedgerDB(temporary)
+            self.assertEqual(restarted.filter_eq("account", "crash-committed"), expected)
+
     def test_query_results_include_wal_recovered_row_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = LedgerDB(temporary)

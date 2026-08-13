@@ -1,10 +1,10 @@
 services:
   ledgerdb:
     build: .
-    image: ledgerdb:day-02
+    image: ledgerdb:day-03
     volumes:
       - ledgerdb-data:/var/lib/ledgerdb
 
 volumes:
   ledgerdb-data:
-    name: ledgerdb-day-02-data
+    name: ledgerdb-day-03-data
