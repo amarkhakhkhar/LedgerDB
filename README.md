@@ -156,3 +156,24 @@ The node derives peers from `RAFT_PEER_SERVICE` and `RAFT_REPLICAS`, so no
 manual peer list is required. Use `scripts/bootstrap-cluster.sh` (or the
 PowerShell equivalent) to recreate the cluster and verify automatic election;
 use the teardown script to remove it.
+
+## Day 8: SQL planning and Raft-aware query readiness
+
+LedgerDB now accepts actual SQL text through `POST /query`; it parses a bounded
+subset of `SELECT`, `WHERE`, `GROUP BY`, and equi-`JOIN`, emits the physical
+plan, and executes it through the existing storage engine. `BETWEEN` uses a
+sorted range index with binary search. Run the real three-node SQL proof:
+
+```powershell
+python benchmarks/raft_sql_demo.py
+```
+
+The proof writes replicated rows and executes five SQL statements through the
+HTTP query endpoint (not direct engine calls), covering scan, equality index,
+binary-search range index, hash group-by, and sort-merge join.
+
+Kubernetes now distinguishes `/livez` from `/readyz`. A follower is ready only
+when it has recent leader contact and has caught up to the leader log index.
+The dedicated `ledgerdb-query` Service therefore excludes lagging replicas while
+the headless Raft peer Service keeps stable discovery intact. See `k8s/README.md`
+for the live EndpointSlice proof.

@@ -12,6 +12,18 @@ spec:
       port: 8000
       targetPort: 8000
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledgerdb-query
+spec:
+  selector:
+    app: ledgerdb
+  ports:
+    - name: http
+      port: 8000
+      targetPort: raft
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -57,10 +69,17 @@ spec:
               containerPort: 8000
           readinessProbe:
             httpGet:
-              path: /status
+              path: /readyz
               port: raft
             initialDelaySeconds: 2
             periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: raft
+            initialDelaySeconds: 2
+            periodSeconds: 5
           volumeMounts:
             - name: data
               mountPath: /var/lib/ledgerdb
