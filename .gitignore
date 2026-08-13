@@ -2,3 +2,9 @@ __pycache__/
 *.py[cod]
 .venv/
 ledgerdb-data/
+
+# Terraform local state
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
