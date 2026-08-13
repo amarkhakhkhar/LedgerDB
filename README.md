@@ -113,3 +113,20 @@ network, subnet, NICs, and SSH access controls. No cloud resources are created
 by CI. From a clean checkout, use `terraform init`, `terraform fmt -check`,
 `terraform validate`, `terraform plan`, `terraform apply`, and finally
 `terraform destroy` as documented in `terraform/README.md`.
+
+
+## Day 6 — Raft leader election
+
+LedgerDB now contains a focused Raft leader-election layer. Each node exposes HTTP endpoints for `RequestVote`, heartbeat `AppendEntries`, and `/status`. Election timeouts are randomized within a fixed bounded window and leaders send periodic heartbeats. Term and `voted_for` state are persisted atomically. This increment deliberately stops at leader election; log replication and commit-index advancement are Day 7 work.
+
+Run a local three-process election proof:
+
+```bash
+python benchmarks/raft_election_demo.py --bound-seconds 3
+```
+
+The demo records the initial leader, kills it, and records the replacement leader plus elapsed election time.
+
+### Kubernetes
+
+`k8s/ledgerdb.yaml` deploys three LedgerDB nodes as a StatefulSet behind a headless Service. StatefulSet ordinals provide stable identities and DNS names required by Raft. See `k8s/README.md` for deployment and cleanup commands. Replace the GHCR owner placeholder with the repository owner containing the Day 6 image.

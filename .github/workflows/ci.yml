@@ -22,6 +22,8 @@ jobs:
         run: python benchmarks/concurrent_load.py --readers 6 --writes 100
       - name: Day 5 transaction crash proof
         run: python tests/test_day5_crash.py
+      - name: Day 6 Raft election proof
+        run: python benchmarks/raft_election_demo.py --bound-seconds 3
       - name: Terraform fmt
         uses: hashicorp/setup-terraform@v3
         with:

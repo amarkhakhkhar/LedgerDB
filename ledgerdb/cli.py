@@ -8,6 +8,7 @@ import os
 import sys
 
 from .engine import LedgerDB
+from .raft import RaftNode, parse_peers
 
 
 def main() -> None:
@@ -24,7 +25,33 @@ def main() -> None:
     transaction.add_argument("credit_account")
     transaction.add_argument("amount", type=int)
     transaction.add_argument("--transaction-key", type=int, default=0)
+    raft = commands.add_parser("raft-server")
+    raft.add_argument("--node-id", default=os.environ.get("RAFT_NODE_ID", os.environ.get("HOSTNAME", "node-0")))
+    raft.add_argument("--peers", default=os.environ.get("RAFT_PEERS", ""))
+    raft.add_argument("--port", type=int, default=int(os.environ.get("RAFT_PORT", "8000")))
+    raft.add_argument("--host", default=os.environ.get("RAFT_HOST", "0.0.0.0"))
+    raft.add_argument("--heartbeat-ms", type=int, default=int(os.environ.get("RAFT_HEARTBEAT_MS", "150")))
+    raft.add_argument("--election-min-ms", type=int, default=int(os.environ.get("RAFT_ELECTION_MIN_MS", "600")))
+    raft.add_argument("--election-max-ms", type=int, default=int(os.environ.get("RAFT_ELECTION_MAX_MS", "1000")))
     arguments = parser.parse_args()
+    if arguments.command == "raft-server":
+        peers = parse_peers(arguments.peers)
+        node = RaftNode(
+            arguments.node_id, peers, os.path.join(arguments.data_dir, "raft"),
+            host=arguments.host, port=arguments.port,
+            heartbeat_interval=arguments.heartbeat_ms / 1000.0,
+            election_timeout=(arguments.election_min_ms / 1000.0, arguments.election_max_ms / 1000.0),
+        )
+        node.start()
+        print(json.dumps({"raft": "started", "node_id": arguments.node_id, "port": arguments.port}), flush=True)
+        try:
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            node.stop()
+        return
+
     database = LedgerDB(arguments.data_dir)
     if arguments.command == "insert":
         row = json.loads(arguments.row)
