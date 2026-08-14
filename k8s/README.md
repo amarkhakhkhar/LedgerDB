@@ -51,3 +51,24 @@ python benchmarks/raft_readiness_k8s_demo.py --namespace default
 It temporarily enables a 100 ms replay delay, deletes one follower, writes 40
 records while it is absent, and proves that its EndpointSlice entry is removed
 while lagging and restored only after it catches up.
+
+## Day 9 chaos metrics and dashboard
+
+Deploy the self-contained Prometheus and Grafana resources after the LedgerDB
+StatefulSet is running:
+
+```powershell
+kubectl apply -f k8s/observability.yaml
+kubectl port-forward service/ledgerdb-grafana 3000:3000
+```
+
+Open `http://localhost:3000` and sign in as `admin` / `admin`. The provisioned
+**LedgerDB Day 9 — Raft Chaos** dashboard shows leader-election counter spikes,
+per-peer replication lag, the current leader, and mean query latency. Start a
+live pod-kill run in another terminal:
+
+```powershell
+while ($true) { kubectl delete pod ("ledgerdb-" + (Get-Random -Minimum 0 -Maximum 3)) --wait=false; Start-Sleep -Seconds 12 }
+```
+
+Use `Ctrl+C` to stop the loop. This targets one pod at a time, leaving a quorum.

@@ -1,0 +1,24 @@
+{
+  "result": "PASS",
+  "seed": 9,
+  "node_kills": 5,
+  "committed_transactions": 39,
+  "committed_transactions_affected": 0,
+  "unacknowledged_transactions_observed": 0,
+  "recovery_seconds": {
+    "count": 5,
+    "min": 0.515,
+    "max": 0.531,
+    "average": 0.519
+  },
+  "query_workload": {
+    "requests": 39,
+    "successful": 38
+  },
+  "batch_tuning": {
+    "batch_size": 96,
+    "estimated_peak_bytes": 16384,
+    "estimated_cost": 21.0
+  },
+  "final_log_length": 55
+}

@@ -72,6 +72,10 @@ class RaftNode:
         self._match_index: dict[str, int] = {}
         self._lag_windows: dict[str, deque[int]] = {}
         self._replication_locks: dict[str, threading.Lock] = {}
+        self._leader_elections = 0
+        self._query_count = 0
+        self._query_latency_seconds_total = 0.0
+        self._query_latency_seconds_max = 0.0
         # Each node receives independent jitter inside a stable slice of the
         # configured timeout window. Purely random timeouts can still collide
         # under synchronized process startup, repeatedly splitting a 3-node
@@ -152,7 +156,33 @@ class RaftNode:
                 "ready": ready,
                 "log_digest": self._log_digest_unlocked(),
                 "replication": replication,
+                "leader_elections": self._leader_elections,
+                "query_count": self._query_count,
+                "query_latency_seconds_total": self._query_latency_seconds_total,
             }
+
+    def prometheus_metrics(self) -> str:
+        """Return scrape-safe operational metrics without an extra dependency."""
+        with self._lock:
+            status = self.status()
+            labels = f'node_id="{self.node_id}"'
+            lines = [
+                "# TYPE ledgerdb_raft_is_leader gauge",
+                f"ledgerdb_raft_is_leader{{{labels}}} {1 if self._state.role == 'leader' else 0}",
+                "# TYPE ledgerdb_raft_leader_elections_total counter",
+                f"ledgerdb_raft_leader_elections_total{{{labels}}} {self._leader_elections}",
+                "# TYPE ledgerdb_raft_log_length gauge",
+                f"ledgerdb_raft_log_length{{{labels}}} {len(self._log)}",
+                "# TYPE ledgerdb_query_requests_total counter",
+                f"ledgerdb_query_requests_total{{{labels}}} {self._query_count}",
+                "# TYPE ledgerdb_query_latency_seconds_sum counter",
+                f"ledgerdb_query_latency_seconds_sum{{{labels}}} {self._query_latency_seconds_total}",
+                "# TYPE ledgerdb_query_latency_seconds_max gauge",
+                f"ledgerdb_query_latency_seconds_max{{{labels}}} {self._query_latency_seconds_max}",
+            ]
+            for peer, details in status["replication"].items():
+                lines.append(f'ledgerdb_raft_replication_lag{{{labels},peer_id="{peer}"}} {details["lag"]}')
+            return "\n".join(lines) + "\n"
 
     def _ready_unlocked(self) -> bool:
         """A node is query-ready only when it has a fresh, caught-up leader view."""
@@ -190,6 +220,14 @@ class RaftNode:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _text(self, status: int, body: str) -> None:
+                encoded = body.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
             def _body(self) -> dict[str, Any]:
                 length = int(self.headers.get("Content-Length", "0"))
                 return json.loads(self.rfile.read(length) or b"{}")
@@ -197,6 +235,8 @@ class RaftNode:
             def do_GET(self) -> None:  # noqa: N802
                 if self.path == "/status":
                     self._json(200, node.status())
+                elif self.path == "/metrics":
+                    self._text(200, node.prometheus_metrics())
                 elif self.path == "/livez":
                     self._json(200, {"live": True, "node_id": node.node_id})
                 elif self.path == "/readyz":
@@ -303,11 +343,18 @@ class RaftNode:
         with self._lock:
             if not self._ready_unlocked():
                 return {"success": False, "error": "node is not query-ready", "leader_id": self._state.leader_id}
+        started = time.monotonic()
         planner = QueryPlanner(self._db)
         try:
-            return {"success": True, "plan": planner.explain(sql), "rows": planner.execute(sql)}
+            result = {"success": True, "plan": planner.explain(sql), "rows": planner.execute(sql)}
         except (KeyError, ValueError) as error:
-            return {"success": False, "error": str(error)}
+            result = {"success": False, "error": str(error)}
+        elapsed = time.monotonic() - started
+        with self._lock:
+            self._query_count += 1
+            self._query_latency_seconds_total += elapsed
+            self._query_latency_seconds_max = max(self._query_latency_seconds_max, elapsed)
+        return result
 
     def append_client_command(self, command: dict[str, Any], timeout: float = 3.0) -> dict[str, Any]:
         return self._client_write({"command": command, "timeout": timeout})
@@ -356,6 +403,7 @@ class RaftNode:
                 return
             self._state.role = "leader"
             self._state.leader_id = self.node_id
+            self._leader_elections += 1
             self._reset_replication_state()
             self._persist_state()
 

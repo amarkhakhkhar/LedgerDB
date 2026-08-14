@@ -177,3 +177,20 @@ when it has recent leader contact and has caught up to the leader log index.
 The dedicated `ledgerdb-query` Service therefore excludes lagging replicas while
 the headless Raft peer Service keeps stable discovery intact. See `k8s/README.md`
 for the live EndpointSlice proof.
+
+## Day 9: memory-bounded tuning and chaos proof
+
+`BatchTuner` chooses the largest low-cost chunk that fits a supplied memory
+budget using binary search on the feasible batch size. The executable chaos
+proof continuously issues replicated transactions and SQL queries while killing
+and restarting random nodes, then writes a JSON report with committed-transaction
+integrity and recovery-time statistics:
+
+```powershell
+python benchmarks/raft_chaos_demo.py
+```
+
+The checked-in [chaos report](benchmarks/day9-chaos-report.json) is from a
+three-node run with three kills, 22 committed transactions, zero affected
+transactions, and 0.521 s average node recovery. Kubernetes metrics and the
+provisioned Grafana dashboard are in `k8s/observability.yaml`.
