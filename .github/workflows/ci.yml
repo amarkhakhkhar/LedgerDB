@@ -26,6 +26,12 @@ jobs:
         run: python benchmarks/raft_election_demo.py --bound-seconds 3
       - name: Day 7 Raft replication proof
         run: python benchmarks/raft_replication_demo.py
+      - name: Day 9 chaos proof
+        run: python benchmarks/raft_chaos_demo.py --duration-seconds 8
+      - name: Day 10 integrated benchmark
+        run: python benchmarks/full_benchmark.py --rows 100000
+      - name: Day 10 live-failure demo proof
+        run: python benchmarks/v1_demo.py
       - name: Terraform fmt
         uses: hashicorp/setup-terraform@v3
         with:
@@ -60,6 +66,7 @@ jobs:
           tags: |
             type=sha,format=short,prefix=sha-
             type=raw,value=latest
+            type=ref,event=tag,prefix=v
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -67,3 +74,24 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.K8S_DEPLOY_ENABLED == 'true'
+    needs: cd
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure kubeconfig
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBE_CONFIG_DATA" | base64 --decode > "$HOME/.kube/config"
+      - name: Deploy tagged image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+        run: bash scripts/deploy.sh "$IMAGE"

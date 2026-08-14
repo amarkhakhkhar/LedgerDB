@@ -1,0 +1,34 @@
+{
+  "release": "LedgerDB v1.0 Day 10",
+  "verification": {
+    "unit_and_integration_tests": "PASS",
+    "test_count": 19,
+    "concurrency_proof": "PASS",
+    "raft_election_proof": "PASS",
+    "raft_replication_proof": "PASS",
+    "chaos_proof": "PASS",
+    "live_failure_demo": "PASS",
+    "yaml_validation": "PASS",
+    "docker_build": "NOT_RUN",
+    "docker_build_note": "Docker CLI is not installed in the verification environment. GitHub Actions CD performs the authoritative Docker build/push."
+  },
+  "chaos_run": {
+    "duration_seconds": 8,
+    "node_kills": 6,
+    "committed_transactions": 116,
+    "committed_transactions_affected": 0,
+    "query_requests": 116,
+    "query_successes": 116,
+    "average_recovery_seconds": 0.523
+  },
+  "benchmark_100k": {
+    "rows": 100000,
+    "insert_seconds": 2.551525207,
+    "equality_scan_seconds": 0.383654521,
+    "equality_index_seconds": 0.004080807,
+    "equality_speedup": 94.0144,
+    "group_by_seconds": 0.794054192,
+    "ledger_balance_debits": 100,
+    "ledger_balance_credits": 100
+  }
+}

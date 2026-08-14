@@ -83,18 +83,151 @@ metadata:
 data:
   day9-chaos.json: |
     {
-      "title": "LedgerDB Day 9 — Raft Chaos",
-      "uid": "ledgerdb-day9-chaos",
+      "title": "LedgerDB v1.0 \u2014 Operations",
+      "uid": "ledgerdb-v1",
       "timezone": "browser",
       "schemaVersion": 39,
-      "refresh": "2s",
+      "refresh": "5s",
       "panels": [
-        {"id": 1, "title": "Leader election spikes", "type": "timeseries", "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}, "targets": [{"expr": "sum(ledgerdb_raft_leader_elections_total)", "legendFormat": "total elections"}]},
-        {"id": 2, "title": "Replication lag during recovery", "type": "timeseries", "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_raft_replication_lag", "legendFormat": "{{node_id}} → {{peer_id}}"}]},
-        {"id": 3, "title": "Current leader", "type": "timeseries", "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_raft_is_leader", "legendFormat": "{{node_id}}"}]},
-        {"id": 4, "title": "Query latency (mean)", "type": "timeseries", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_query_latency_seconds_sum / clamp_min(ledgerdb_query_requests_total, 1)", "legendFormat": "{{node_id}}"}]}
+        {
+          "id": 1,
+          "title": "Leader election rate",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(ledgerdb_raft_leader_elections_total[1m]))",
+              "legendFormat": "elections/sec"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Current leader",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "ledgerdb_raft_is_leader",
+              "legendFormat": "{{node_id}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Replication lag",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "ledgerdb_raft_replication_lag",
+              "legendFormat": "{{node_id}} \u2192 {{peer_id}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Query latency (avg, 1m)",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(ledgerdb_query_latency_seconds_sum[1m])) / clamp_min(sum(rate(ledgerdb_query_requests_total[1m])), 1e-9)",
+              "legendFormat": "average latency"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Query throughput",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 0,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(ledgerdb_query_requests_total[1m]))",
+              "legendFormat": "queries/sec"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Node readiness",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 12,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "ledgerdb_raft_ready",
+              "legendFormat": "{{node_id}}"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Committed transactions/sec",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 0,
+            "y": 24,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(ledgerdb_transactions_committed_total[1m]))",
+              "legendFormat": "transactions/sec"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Raft term",
+          "type": "timeseries",
+          "gridPos": {
+            "x": 12,
+            "y": 24,
+            "w": 12,
+            "h": 8
+          },
+          "targets": [
+            {
+              "expr": "ledgerdb_raft_term",
+              "legendFormat": "{{node_id}}"
+            }
+          ]
+        }
       ]
     }
+
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -76,6 +76,8 @@ class RaftNode:
         self._query_count = 0
         self._query_latency_seconds_total = 0.0
         self._query_latency_seconds_max = 0.0
+        self._query_errors = 0
+        self._transactions_committed = 0
         # Each node receives independent jitter inside a stable slice of the
         # configured timeout window. Purely random timeouts can still collide
         # under synchronized process startup, repeatedly splitting a 3-node
@@ -159,6 +161,9 @@ class RaftNode:
                 "leader_elections": self._leader_elections,
                 "query_count": self._query_count,
                 "query_latency_seconds_total": self._query_latency_seconds_total,
+                "query_latency_seconds_max": self._query_latency_seconds_max,
+                "query_errors": self._query_errors,
+                "transactions_committed": self._transactions_committed,
             }
 
     def prometheus_metrics(self) -> str:
@@ -169,16 +174,24 @@ class RaftNode:
             lines = [
                 "# TYPE ledgerdb_raft_is_leader gauge",
                 f"ledgerdb_raft_is_leader{{{labels}}} {1 if self._state.role == 'leader' else 0}",
+                "# TYPE ledgerdb_raft_ready gauge",
+                f"ledgerdb_raft_ready{{{labels}}} {1 if status["ready"] else 0}",
+                "# TYPE ledgerdb_raft_term gauge",
+                f"ledgerdb_raft_term{{{labels}}} {self._state.current_term}",
                 "# TYPE ledgerdb_raft_leader_elections_total counter",
                 f"ledgerdb_raft_leader_elections_total{{{labels}}} {self._leader_elections}",
                 "# TYPE ledgerdb_raft_log_length gauge",
                 f"ledgerdb_raft_log_length{{{labels}}} {len(self._log)}",
                 "# TYPE ledgerdb_query_requests_total counter",
                 f"ledgerdb_query_requests_total{{{labels}}} {self._query_count}",
+                "# TYPE ledgerdb_query_errors_total counter",
+                f"ledgerdb_query_errors_total{{{labels}}} {self._query_errors}",
                 "# TYPE ledgerdb_query_latency_seconds_sum counter",
                 f"ledgerdb_query_latency_seconds_sum{{{labels}}} {self._query_latency_seconds_total}",
                 "# TYPE ledgerdb_query_latency_seconds_max gauge",
                 f"ledgerdb_query_latency_seconds_max{{{labels}}} {self._query_latency_seconds_max}",
+                "# TYPE ledgerdb_transactions_committed_total counter",
+                f"ledgerdb_transactions_committed_total{{{labels}}} {self._transactions_committed}",
             ]
             for peer, details in status["replication"].items():
                 lines.append(f'ledgerdb_raft_replication_lag{{{labels},peer_id="{peer}"}} {details["lag"]}')
@@ -256,6 +269,8 @@ class RaftNode:
                         self._json(200, node._append_entries(payload))
                     elif self.path == "/client-write":
                         self._json(200, node._client_write(payload))
+                    elif self.path == "/transaction":
+                        self._json(200, node._transaction(payload))
                     elif self.path == "/query":
                         self._json(200, node._query(payload))
                     else:
@@ -336,6 +351,26 @@ class RaftNode:
             acknowledged = sum(1 for peer in self.peers if peer != self.node_id and self._match_index.get(peer, 0) >= index) + 1
             return {"success": acknowledged >= self.majority, "index": index, "acknowledgements": acknowledged, "leader_id": self.node_id}
 
+    def _transaction(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Replicate one double-entry transaction through the Raft log."""
+        required = ("idempotency_key", "debit_account", "credit_account", "amount")
+        missing = [name for name in required if name not in request]
+        if missing:
+            return {"success": False, "error": f"missing fields: {', '.join(missing)}"}
+        command = {
+            "operation": "transaction",
+            "idempotency_key": str(request["idempotency_key"]),
+            "debit_account": str(request["debit_account"]),
+            "credit_account": str(request["credit_account"]),
+            "amount": int(request["amount"]),
+            "transaction_key": int(request.get("transaction_key", 0)),
+        }
+        result = self._client_write({"command": command})
+        if result.get("success"):
+            with self._lock:
+                self._transactions_committed += 1
+        return result
+
     def _query(self, request: dict[str, Any]) -> dict[str, Any]:
         sql = request.get("sql")
         if not isinstance(sql, str):
@@ -352,6 +387,8 @@ class RaftNode:
         elapsed = time.monotonic() - started
         with self._lock:
             self._query_count += 1
+            if not result["success"]:
+                self._query_errors += 1
             self._query_latency_seconds_total += elapsed
             self._query_latency_seconds_max = max(self._query_latency_seconds_max, elapsed)
         return result
