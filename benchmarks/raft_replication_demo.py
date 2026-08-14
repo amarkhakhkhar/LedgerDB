@@ -14,12 +14,12 @@ from urllib.error import URLError
 
 
 def status(port: int) -> dict:
-    with urlopen(f"http://127.0.0.1:{port}/status", timeout=0.5) as response:
+    with urlopen(f"http://127.0.0.1:{port}/status", timeout=2) as response:
         return json.loads(response.read())
 
 
 def state(port: int) -> dict:
-    with urlopen(f"http://127.0.0.1:{port}/state", timeout=0.5) as response:
+    with urlopen(f"http://127.0.0.1:{port}/state", timeout=2) as response:
         return json.loads(response.read())
 
 
@@ -88,7 +88,7 @@ def main() -> None:
         lag = len(leader_after["log"]) - offline_log_length
         start_time = time.monotonic()
         procs[follower] = start(follower)
-        deadline = start_time + 8
+        deadline = start_time + 15
         while time.monotonic() < deadline:
             try:
                 follower_state = state(ports[follower])

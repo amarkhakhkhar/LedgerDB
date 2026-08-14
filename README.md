@@ -194,3 +194,39 @@ The checked-in [chaos report](benchmarks/day9-chaos-report.json) is from a
 three-node run with three kills, 22 committed transactions, zero affected
 transactions, and 0.521 s average node recovery. Kubernetes metrics and the
 provisioned Grafana dashboard are in `k8s/observability.yaml`.
+
+
+## Day 10 — LedgerDB v1.0 integration
+
+Day 10 integrates the storage, concurrency, SQL, ledger, Raft, Kubernetes, and observability layers into one deployed path. The Raft HTTP API now exposes a first-class `/transaction` endpoint so double-entry ledger commands enter the same durable replicated log as ordinary writes. `/query` runs the real SQL parser/planner against a query-ready node.
+
+### v1.0 proof suite
+
+Run the complete regression suite:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Run the explicit proofs and benchmarks:
+
+```powershell
+python benchmarks/concurrent_load.py --readers 6 --writes 100
+python benchmarks/raft_chaos_demo.py --duration-seconds 8
+python benchmarks/full_benchmark.py --rows 100000
+python benchmarks/v1_demo.py
+python benchmarks/filter_benchmark.py --rows 1000000 --distinct 10000 --target 42
+```
+
+### v1.0 release artifacts
+
+- [Architecture](docs/architecture.md)
+- [CI/CD pipeline](docs/pipeline.md)
+- [Known limitations](docs/known-limitations.md)
+- `k8s/observability.yaml` — Prometheus + Grafana monitoring
+- `benchmarks/v1_demo.py` — recorded-demo-ready live failure proof
+- `benchmarks/full_benchmark.py` — integrated benchmark suite
+
+### Grafana
+
+The dashboard now graphs **election rate** rather than the monotonically increasing lifetime counter, shows current term/readiness, replication lag, query throughput, query latency, and committed transactions. This prevents a cumulative counter from visually masquerading as an election spike.

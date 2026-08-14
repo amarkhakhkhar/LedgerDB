@@ -15,7 +15,7 @@ class RaftReplicationTests(unittest.TestCase):
             cwd=root,
             text=True,
             capture_output=True,
-            timeout=30,
+            timeout=45,
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

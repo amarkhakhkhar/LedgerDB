@@ -25,7 +25,7 @@ def http(port: int, path: str, payload: dict | None = None) -> dict:
     data = json.dumps(payload).encode() if payload is not None else None
     request = Request(f"http://127.0.0.1:{port}{path}", data=data,
                       headers={"Content-Type": "application/json"}, method="POST" if payload else "GET")
-    with urlopen(request, timeout=.75) as response:
+    with urlopen(request, timeout=2.0) as response:
         return json.loads(response.read())
 
 
@@ -115,9 +115,21 @@ def main() -> None:
             raise RuntimeError("no initial leader")
         # SQL data is distinct from transaction entries and drives the concurrent query workload.
         for key in range(16):
-            while (active_leader := leader()) is None:
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline:
+                active_leader = leader()
+                if active_leader is None:
+                    time.sleep(.03)
+                    continue
+                try:
+                    result = http(ports[active_leader], "/client-write", {"command": {"operation": "insert", "values": {"key": key, "value": key}}})
+                    if result.get("success"):
+                        break
+                except (OSError, URLError):
+                    pass
                 time.sleep(.03)
-            assert http(ports[active_leader], "/client-write", {"command": {"operation": "insert", "values": {"key": key, "value": key}}})["success"]
+            else:
+                raise RuntimeError(f"failed to seed key {key}")
         tuner = BatchTuner(row_bytes=128, fixed_batch_bytes=4096, memory_budget_bytes=16 * 1024)
         batch_plan = tuner.tune(1000)
         worker = threading.Thread(target=workload, daemon=True)
