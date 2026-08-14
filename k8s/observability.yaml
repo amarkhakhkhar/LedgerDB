@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledgerdb-prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 2s
+    scrape_configs:
+      - job_name: ledgerdb-raft
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - ledgerdb-0.ledgerdb:8000
+              - ledgerdb-1.ledgerdb:8000
+              - ledgerdb-2.ledgerdb:8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledgerdb-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledgerdb-prometheus
+  template:
+    metadata:
+      labels:
+        app: ledgerdb-prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.54.1
+          args: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: ledgerdb-prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledgerdb-prometheus
+spec:
+  selector:
+    app: ledgerdb-prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledgerdb-grafana-provisioning
+data:
+  datasource.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://ledgerdb-prometheus:9090
+        isDefault: true
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: LedgerDB
+        folder: LedgerDB
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledgerdb-chaos-dashboard
+data:
+  day9-chaos.json: |
+    {
+      "title": "LedgerDB Day 9 — Raft Chaos",
+      "uid": "ledgerdb-day9-chaos",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "2s",
+      "panels": [
+        {"id": 1, "title": "Leader election spikes", "type": "timeseries", "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}, "targets": [{"expr": "sum(ledgerdb_raft_leader_elections_total)", "legendFormat": "total elections"}]},
+        {"id": 2, "title": "Replication lag during recovery", "type": "timeseries", "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_raft_replication_lag", "legendFormat": "{{node_id}} → {{peer_id}}"}]},
+        {"id": 3, "title": "Current leader", "type": "timeseries", "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_raft_is_leader", "legendFormat": "{{node_id}}"}]},
+        {"id": 4, "title": "Query latency (mean)", "type": "timeseries", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}, "targets": [{"expr": "ledgerdb_query_latency_seconds_sum / clamp_min(ledgerdb_query_requests_total, 1)", "legendFormat": "{{node_id}}"}]}
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledgerdb-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledgerdb-grafana
+  template:
+    metadata:
+      labels:
+        app: ledgerdb-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/datasources/datasource.yml
+              subPath: datasource.yml
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboard.yml
+              subPath: dashboards.yml
+            - name: dashboard
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: provisioning
+          configMap:
+            name: ledgerdb-grafana-provisioning
+        - name: dashboard
+          configMap:
+            name: ledgerdb-chaos-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledgerdb-grafana
+spec:
+  selector:
+    app: ledgerdb-grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

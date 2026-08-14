@@ -26,5 +26,8 @@ class RaftHealthTests(unittest.TestCase):
                 node._append_entries({"term": 1, "leader_id": "node-0", "prev_log_index": 0, "leader_log_index": 3, "entries": entries})
                 self.assertTrue(node.status()["ready"])
                 self.assertTrue(json.loads(urlopen(f"http://127.0.0.1:{port}/readyz").read())["ready"])
+                metrics = urlopen(f"http://127.0.0.1:{port}/metrics").read().decode()
+                self.assertIn("ledgerdb_raft_is_leader", metrics)
+                self.assertIn("ledgerdb_raft_replication_lag", metrics)
             finally:
                 node.stop()
