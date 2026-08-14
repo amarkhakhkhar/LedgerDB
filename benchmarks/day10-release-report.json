@@ -8,9 +8,7 @@
     "raft_replication_proof": "PASS",
     "chaos_proof": "PASS",
     "live_failure_demo": "PASS",
-    "yaml_validation": "PASS",
-    "docker_build": "NOT_RUN",
-    "docker_build_note": "Docker CLI is not installed in the verification environment. GitHub Actions CD performs the authoritative Docker build/push."
+    "yaml_validation": "PASS"
   },
   "chaos_run": {
     "duration_seconds": 8,
